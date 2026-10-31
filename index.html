@@ -1,0 +1,675 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b1220">
+<title>Metro Unjam</title>
+<style>
+  :root {
+    --bg: #0b1220; --panel: #131d33; --panel-2: #1a2742; --line: #25365a;
+    --text: #e8eef8; --muted: #8fa2c4; --accent: #4fb3ff; --danger: #ff5d6c;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font-family: "Vazirmatn", Tahoma, system-ui, -apple-system, "Segoe UI", sans-serif;
+    overflow: hidden; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+  canvas { display: block; width: 100vw; height: 100vh; touch-action: manipulation; }
+
+  #hud { position: fixed; top: 0; left: 0; right: 0; height: 56px; display: flex; align-items: center;
+    gap: 10px; padding: 0 14px; padding-top: env(safe-area-inset-top); z-index: 2; pointer-events: none; }
+  #hud > * { pointer-events: auto; }
+  #level { font-weight: 700; font-size: 15px; letter-spacing: .2px; }
+  #level small { color: var(--muted); font-weight: 400; margin-inline-start: 4px; }
+  #lives { margin-inline-start: auto; display: flex; gap: 3px; font-size: 18px; line-height: 1; }
+  #lives .h { color: var(--danger); transition: transform .25s, opacity .25s, filter .25s; display: inline-block; }
+  #lives .h.off { opacity: .22; filter: grayscale(1); transform: scale(.8); }
+  #lives.hit { animation: hit .45s; }
+  @keyframes hit { 0%,100% { transform: none } 25% { transform: translateX(-5px) } 75% { transform: translateX(5px) } }
+  .iconbtn { width: 38px; height: 38px; border-radius: 12px; border: 1px solid var(--line); background: var(--panel);
+    color: var(--text); font-size: 18px; cursor: pointer; display: grid; place-items: center; padding: 0; }
+  .iconbtn:hover { background: var(--panel-2); }
+  .iconbtn:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  #overlay { position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
+    background: rgba(5,9,18,.72); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); z-index: 3; padding: 16px; }
+  #overlay.show { display: flex; animation: fade .25s ease-out; }
+  @keyframes fade { from { opacity: 0 } to { opacity: 1 } }
+  .card { width: min(420px, 100%); background: linear-gradient(180deg, #17233d, #111a2e); border: 1px solid var(--line);
+    border-radius: 22px; padding: 26px 22px 22px; text-align: center; box-shadow: 0 30px 80px rgba(0,0,0,.5);
+    animation: pop .32s cubic-bezier(.2,1.4,.4,1); max-height: calc(100vh - 32px); overflow: auto; }
+  @keyframes pop { from { transform: scale(.85); opacity: 0 } to { transform: none; opacity: 1 } }
+  .card .emoji { font-size: 46px; line-height: 1; }
+  .card h1 { margin: 10px 0 6px; font-size: 24px; }
+  .card h2 { margin: 10px 0 6px; font-size: 21px; }
+  .card p { margin: 6px 0; color: var(--muted); font-size: 14.5px; line-height: 1.8; }
+  .card .hearts { font-size: 22px; letter-spacing: 3px; margin: 8px 0 2px; }
+  .btn { margin-top: 16px; padding: 13px 28px; font: inherit; font-size: 16px; font-weight: 700; border: 0; border-radius: 14px;
+    background: linear-gradient(180deg, #6cc2ff, #3a9df0); color: #04101e; cursor: pointer; box-shadow: 0 6px 18px rgba(79,179,255,.35); }
+  .btn:active { transform: translateY(1px); }
+  .btn.ghost { background: transparent; color: var(--text); border: 1px solid var(--line); box-shadow: none; font-weight: 500; }
+  .row { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+  .grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; margin-top: 16px; direction: ltr; }
+  .grid button { aspect-ratio: 1; border-radius: 10px; border: 1px solid var(--line); background: var(--panel-2); color: var(--text);
+    font: inherit; font-size: 14px; font-weight: 700; cursor: pointer; padding: 0; }
+  .grid button.done { background: #1d3a34; border-color: #2f6b59; color: #9df2c4; }
+  .grid button.cur { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(79,179,255,.35) inset; }
+  .grid button:disabled { opacity: .3; cursor: default; }
+  .legend { display: flex; gap: 14px; justify-content: center; margin-top: 10px; color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+<div id="hud">
+  <button class="iconbtn" id="menuBtn" aria-label="فهرست مراحل" title="فهرست مراحل">☰</button>
+  <button class="iconbtn" id="restartBtn" aria-label="شروع دوباره" title="شروع دوباره (R)">↻</button>
+  <span id="level"></span>
+  <span id="lives" aria-live="polite"></span>
+</div>
+<canvas id="c" aria-label="صفحه‌ی بازی"></canvas>
+<div id="overlay"><div class="card" id="card"></div></div>
+<script src="levels.js"></script>
+<script>
+(function () {
+  'use strict';
+  const LEVELS = window.LEVELS || [];
+  const PALETTE = {
+    red:    { base: '#ff5d6c', light: '#ff8f99', dark: '#c23446', glyph: 'tri' },
+    blue:   { base: '#4fb3ff', light: '#8fd0ff', dark: '#2678c4', glyph: 'sq' },
+    green:  { base: '#4fe08c', light: '#8ff0b6', dark: '#24a35c', glyph: 'dot' },
+    yellow: { base: '#ffd35c', light: '#ffe594', dark: '#d19b1c', glyph: 'dia' },
+  };
+  const FALLBACK = { base: '#b9c4d8', light: '#dbe2ee', dark: '#7d8aa3', glyph: 'dot' };
+  const pal = (c) => PALETTE[c] || FALLBACK;
+  const STORE_KEY = 'metroUnjam.progress.v1';
+
+  const cvs = document.getElementById('c');
+  const ctx = cvs.getContext('2d');
+  const overlay = document.getElementById('overlay');
+  const card = document.getElementById('card');
+  const levelEl = document.getElementById('level');
+  const livesEl = document.getElementById('lives');
+
+  // ---------- persistence (best effort) ----------
+  function loadProgress() {
+    try { const v = JSON.parse(localStorage.getItem(STORE_KEY)); if (v && typeof v.unlocked === 'number') return v; } catch (e) {}
+    return { unlocked: 0, done: [] };
+  }
+  function saveProgress() { try { localStorage.setItem(STORE_KEY, JSON.stringify(progress)); } catch (e) {} }
+  let progress = loadProgress();
+  progress.unlocked = Math.min(Math.max(0, progress.unlocked | 0), Math.max(0, LEVELS.length - 1));
+  if (!Array.isArray(progress.done)) progress.done = [];
+
+  // ---------- canvas sizing ----------
+  let W = 0, H = 0, dpr = 1, bgCache = null;
+  function resize() {
+    dpr = Math.min(window.devicePixelRatio || 1, 3);
+    W = window.innerWidth; H = window.innerHeight;
+    cvs.width = Math.round(W * dpr); cvs.height = Math.round(H * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    bgCache = null;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // ---------- game state ----------
+  let levelIndex = progress.unlocked;
+  let state = null;
+  let paused = true;   // paused while an overlay is open
+  let now = performance.now();
+
+  function startLevel(i) {
+    if (typeof i === 'number') levelIndex = Math.max(0, Math.min(LEVELS.length - 1, i));
+    const L = LEVELS[levelIndex];
+    const timeout = Math.max(1, Number(L.passengerTimeoutSeconds) || 10) * 1000;
+    const lives = Math.max(1, (L.lives | 0) || 3);
+    state = {
+      lanes: L.lanes.map((lane) => lane.map((c) => ({ color: c, timer: null, x: null, born: 0 }))),
+      trains: L.trains.slice(),
+      trainIndex: 0,
+      boarded: 0,
+      seatTimes: [],
+      capacity: L.capacity,
+      timeout,
+      lives, maxLives: lives,
+      over: false,
+      maxLen: Math.max(1, ...L.lanes.map((l) => l.length)),
+      shake: 0, laneFlash: L.lanes.map(() => 0),
+      arriveT: now, depart: null,
+      flyers: [], particles: [], floaters: [],
+      moves: 0, timeouts: 0, startT: now,
+    };
+    state.lanes.forEach((lane) => { if (lane.length) lane[0].timer = timeout; });
+    levelEl.innerHTML = 'ایستگاه ' + (levelIndex + 1) + '<small>از ' + LEVELS.length + '</small>';
+    updateLives();
+    hideOverlay();
+    paused = false;
+  }
+
+  function updateLives(hit) {
+    let html = '';
+    for (let k = 0; k < state.maxLives; k++) html += '<span class="h' + (k < state.lives ? '' : ' off') + '">❤</span>';
+    livesEl.innerHTML = html;
+    livesEl.setAttribute('aria-label', state.lives + ' جان');
+    if (hit) { livesEl.classList.remove('hit'); void livesEl.offsetWidth; livesEl.classList.add('hit'); }
+  }
+
+  // ---------- layout ----------
+  function layout() {
+    const n = state.lanes.length;
+    const pad = Math.max(Math.max(14, Math.min(28, W * 0.04)), (W - 680) / 2); // cap play width on desktop
+    const top = 64;
+    const trainH = Math.max(64, Math.min(104, H * 0.12));
+    const nextH = 26;
+    const laneTop = top + trainH + nextH + 22;
+    const gap = Math.max(8, Math.min(14, H * 0.012));
+    const bottom = 18;
+    const laneH = Math.max(46, Math.min(116, (H - laneTop - bottom - gap * (n - 1)) / n));
+    const laneW = W - pad * 2;
+    const r = Math.max(9, Math.min(laneH * 0.3, (laneW - 64) / (state.maxLen * 2.6 + 0.4), 26));
+    const spacing = r * 2.6;
+    return { n, pad, top, trainH, laneTop, gap, laneH, laneW, r, spacing };
+  }
+  function laneRect(i, lo) { return { x: lo.pad, y: lo.laneTop + i * (lo.laneH + lo.gap), w: lo.laneW, h: lo.laneH }; }
+  function passengerX(j, lo) { return lo.pad + 40 + lo.r * 1.55 + j * lo.spacing; }
+  function trainGeom(lo) {
+    const w = Math.min(W - Math.max(14, lo.pad) * 2, 140 + state.capacity * 64);
+    const x = (W - w) / 2;
+    return { x, y: lo.top, w, h: lo.trainH };
+  }
+  function seatPos(k, tg) {
+    const sw = Math.min(54, (tg.w - 90) / state.capacity);
+    const startX = tg.x + 70 + (tg.w - 90 - sw * state.capacity) / 2;
+    return { x: startX + sw * k + sw / 2, y: tg.y + tg.h * 0.46, s: sw };
+  }
+
+  // ---------- rules ----------
+  function tapLane(i) {
+    if (!state || state.over || paused) return false;
+    const lane = state.lanes[i];
+    if (!lane || !lane.length) return false;
+    const train = state.trains[state.trainIndex];
+    if (!train) return false;
+    if (lane[0].color !== train) {
+      state.shake = 280;
+      state.laneFlash[i] = 320;
+      return false;
+    }
+    const lo = layout();
+    const tg = trainGeom(lo);
+    const p = lane.shift();
+    const lr = laneRect(i, lo);
+    const sp = seatPos(state.boarded, tg);
+    state.flyers.push({ color: p.color, x0: p.x ?? passengerX(0, lo), y0: lr.y + lr.h / 2, x1: sp.x, y1: sp.y, t: now, r: lo.r });
+    state.seatTimes[state.boarded] = now;
+    state.boarded++;
+    state.moves++;
+    if (lane.length) lane[0].timer = state.timeout;
+    if (state.boarded === state.capacity) {
+      state.depart = { color: train, t: now + 260, cap: state.capacity };
+      state.trainIndex++;
+      state.boarded = 0;
+      state.seatTimes = [];
+      state.arriveT = now + 260;
+    }
+    checkEnd();
+    return true;
+  }
+
+  function checkEnd() {
+    if (state.over) return;
+    const allEmpty = state.lanes.every((l) => l.length === 0);
+    if (allEmpty && state.trainIndex >= state.trains.length) finish(true);
+  }
+
+  // A passenger who waited too long walks to the back of their own lane and
+  // costs one life. (They used to vanish, which left too few passengers for
+  // the remaining trains and soft-locked the level.)
+  function timeoutPassenger(i) {
+    const lane = state.lanes[i];
+    const p = lane.shift();
+    p.timer = null;
+    lane.push(p);
+    lane[0].timer = state.timeout;
+    state.timeouts++;
+    state.laneFlash[i] = 500;
+    const lo = layout();
+    const lr = laneRect(i, lo);
+    state.floaters.push({ text: '−1 ❤', x: passengerX(0, lo), y: lr.y + lr.h / 2, t: now, color: '#ff8f99' });
+    state.lives--;
+    updateLives(true);
+    if (state.lives <= 0) finish(false);
+  }
+
+  function finish(won) {
+    if (state.over) return;
+    state.over = true;
+    const which = state;
+    setTimeout(() => {
+      if (state !== which) return; // level was restarted/changed meanwhile
+      if (won) {
+        if (!progress.done.includes(levelIndex)) progress.done.push(levelIndex);
+        progress.unlocked = Math.min(LEVELS.length - 1, Math.max(progress.unlocked, levelIndex + 1));
+        saveProgress();
+        showWin();
+      } else {
+        showLose();
+      }
+    }, won ? 650 : 450);
+  }
+
+  // ---------- overlays ----------
+  function showOverlay(html) {
+    paused = true;
+    card.innerHTML = html;
+    overlay.classList.add('show');
+    const first = card.querySelector('[data-focus]') || card.querySelector('button');
+    if (first) setTimeout(() => first.focus({ preventScroll: true }), 30);
+  }
+  function hideOverlay() { overlay.classList.remove('show'); }
+  function heartsStr() { let s = ''; for (let k = 0; k < state.maxLives; k++) s += k < state.lives ? '❤️' : '🤍'; return s; }
+
+  function showWin() {
+    const last = levelIndex + 1 >= LEVELS.length;
+    const secs = Math.round((now - state.startT) / 1000);
+    showOverlay(
+      '<div class="emoji">' + (last ? '🏆' : '🚇') + '</div>' +
+      '<h2>' + (last ? 'همه‌ی مراحل تمام شد!' : 'ایستگاه ' + (levelIndex + 1) + ' باز شد') + '</h2>' +
+      '<div class="hearts">' + heartsStr() + '</div>' +
+      '<p>' + state.moves + ' مسافر سوار شد · ' + secs + ' ثانیه</p>' +
+      '<div class="row">' +
+        (last ? '<button class="btn" id="nextBtn" data-focus>از اول</button>'
+              : '<button class="btn" id="nextBtn" data-focus>مرحله‌ی بعد</button>') +
+        '<button class="btn ghost" id="againBtn">تکرار</button>' +
+      '</div>');
+    card.querySelector('#nextBtn').onclick = () => startLevel(last ? 0 : levelIndex + 1);
+    card.querySelector('#againBtn').onclick = () => startLevel(levelIndex);
+  }
+  function showLose() {
+    showOverlay(
+      '<div class="emoji">😵‍💫</div><h2>مسافران از دست رفتند</h2>' +
+      '<p>هر مسافر فقط ' + Math.round(state.timeout / 1000) + ' ثانیه صبر می‌کند؛ بعد به ته صف برمی‌گردد و یک جان کم می‌شود.</p>' +
+      '<div class="row"><button class="btn" id="againBtn" data-focus>دوباره</button>' +
+      '<button class="btn ghost" id="menu2">مراحل</button></div>');
+    card.querySelector('#againBtn').onclick = () => startLevel(levelIndex);
+    card.querySelector('#menu2').onclick = showMenu;
+  }
+  function showMenu() {
+    const inGame = state && !state.over;
+    const fresh = inGame && state.moves === 0 && state.timeouts === 0;
+    let grid = '';
+    for (let k = 0; k < LEVELS.length; k++) {
+      const cls = (progress.done.includes(k) ? 'done' : '') + (k === levelIndex ? ' cur' : '');
+      grid += '<button class="' + cls + '" data-l="' + k + '"' + (k > progress.unlocked ? ' disabled' : '') + '>' + (k + 1) + '</button>';
+    }
+    showOverlay(
+      '<div class="emoji">🚇</div><h1>Metro Unjam</h1>' +
+      '<p>روی هر سکو بزن تا مسافرِ اولِ صف سوار قطار شود. فقط مسافرِ هم‌رنگ قطار سوار می‌شود. قبل از تمام شدن صبرشان عجله کن!</p>' +
+      '<div class="legend"><span>▲ قرمز</span><span>■ آبی</span><span>● سبز</span><span>◆ زرد</span></div>' +
+      '<div class="row">' +
+        '<button class="btn" id="playBtn" data-focus>' + (fresh ? 'شروع ایستگاه ' + (levelIndex + 1) : inGame ? 'ادامه' : 'شروع ایستگاه ' + (progress.unlocked + 1)) + '</button>' +
+      '</div>' +
+      '<div class="grid">' + grid + '</div>');
+    card.querySelector('#playBtn').onclick = () => { if (inGame) { hideOverlay(); paused = false; } else startLevel(progress.unlocked); };
+    card.querySelectorAll('.grid button').forEach((b) => { b.onclick = () => startLevel(+b.dataset.l); });
+  }
+
+  document.getElementById('menuBtn').onclick = showMenu;
+  document.getElementById('restartBtn').onclick = () => { if (state) startLevel(levelIndex); };
+
+  // ---------- loop ----------
+  let lastTick = performance.now();
+  function tick(t) {
+    const dt = Math.min(50, Math.max(0, t - lastTick)); // clamp: no mass time-outs after a stall
+    lastTick = t;
+    now = t;
+    if (state && !state.over && !paused) {
+      for (let i = 0; i < state.lanes.length; i++) {
+        const lane = state.lanes[i];
+        if (lane.length && lane[0].timer !== null) {
+          lane[0].timer -= dt;
+          if (lane[0].timer <= 0) { timeoutPassenger(i); if (state.over) break; }
+        }
+      }
+    }
+    if (state) {
+      if (state.shake > 0) state.shake -= dt;
+      state.laneFlash = state.laneFlash.map((v) => Math.max(0, v - dt));
+    }
+    draw();
+    requestAnimationFrame(tick);
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden && state && !state.over && !overlay.classList.contains('show')) showMenu();
+  });
+
+  // ---------- drawing ----------
+  function rr(x, y, w, h, r) {
+    r = Math.min(r, w / 2, h / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+  const ease = (x) => 1 - Math.pow(1 - Math.min(1, Math.max(0, x)), 3);
+  const easeBack = (x) => { x = Math.min(1, Math.max(0, x)); const c = 1.7; return 1 + (c + 1) * Math.pow(x - 1, 3) + c * Math.pow(x - 1, 2); };
+
+  function buildBg() {
+    const c = document.createElement('canvas');
+    c.width = cvs.width; c.height = cvs.height;
+    const g = c.getContext('2d');
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const grd = g.createLinearGradient(0, 0, 0, H);
+    grd.addColorStop(0, '#0e1830'); grd.addColorStop(1, '#070c18');
+    g.fillStyle = grd; g.fillRect(0, 0, W, H);
+    // faint metro-map lines
+    g.lineCap = 'round'; g.lineJoin = 'round'; g.lineWidth = 6; g.globalAlpha = 0.06;
+    const lines = [['#ff5d6c', [[-20, H * .2], [W * .3, H * .2], [W * .55, H * .45], [W + 20, H * .45]]],
+                   ['#4fb3ff', [[W * .15, -20], [W * .15, H * .5], [W * .4, H * .75], [W * .4, H + 20]]],
+                   ['#4fe08c', [[-20, H * .85], [W * .6, H * .85], [W * .8, H * .65], [W * .8, -20]]],
+                   ['#ffd35c', [[W + 20, H * .3], [W * .7, H * .3], [W * .5, H * .1], [W * .5, -20]]]];
+    lines.forEach(([col, pts]) => { g.strokeStyle = col; g.beginPath(); pts.forEach(([x, y], k) => k ? g.lineTo(x, y) : g.moveTo(x, y)); g.stroke(); });
+    g.globalAlpha = 1;
+    const vg = g.createRadialGradient(W / 2, H * .4, Math.min(W, H) * .2, W / 2, H * .4, Math.max(W, H) * .8);
+    vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,.45)');
+    g.fillStyle = vg; g.fillRect(0, 0, W, H);
+    return c;
+  }
+
+  function glyph(kind, x, y, s, color) {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    if (kind === 'tri') { ctx.moveTo(x, y - s); ctx.lineTo(x + s * 0.95, y + s * 0.7); ctx.lineTo(x - s * 0.95, y + s * 0.7); ctx.closePath(); }
+    else if (kind === 'sq') { rr(x - s * 0.75, y - s * 0.75, s * 1.5, s * 1.5, s * 0.25); }
+    else if (kind === 'dia') { ctx.moveTo(x, y - s); ctx.lineTo(x + s * 0.8, y); ctx.lineTo(x, y + s); ctx.lineTo(x - s * 0.8, y); ctx.closePath(); }
+    else { ctx.arc(x, y, s * 0.8, 0, Math.PI * 2); }
+    ctx.fill();
+  }
+
+  // A passenger: head + rounded body, with the colour's glyph on the chest.
+  function person(x, cy, r, color, alpha) {
+    const p = pal(color);
+    ctx.save();
+    ctx.globalAlpha = alpha == null ? 1 : alpha;
+    ctx.fillStyle = 'rgba(0,0,0,.28)';
+    ctx.beginPath(); ctx.ellipse(x, cy + r * 1.02, r * 0.85, r * 0.2, 0, 0, Math.PI * 2); ctx.fill();
+    const bg = ctx.createLinearGradient(0, cy - r, 0, cy + r);
+    bg.addColorStop(0, p.light); bg.addColorStop(1, p.dark);
+    ctx.fillStyle = bg;
+    rr(x - r * 0.82, cy - r * 0.1, r * 1.64, r * 1.08, r * 0.62);
+    ctx.fill();
+    ctx.beginPath(); ctx.arc(x, cy - r * 0.55, r * 0.44, 0, Math.PI * 2);
+    const hg = ctx.createRadialGradient(x - r * 0.15, cy - r * 0.7, r * 0.05, x, cy - r * 0.55, r * 0.5);
+    hg.addColorStop(0, p.light); hg.addColorStop(1, p.base);
+    ctx.fillStyle = hg; ctx.fill();
+    glyph(p.glyph, x, cy + r * 0.42, r * 0.24, 'rgba(255,255,255,.85)');
+    ctx.restore();
+  }
+
+  function drawTrain(color, tg, offsetX, seatsFilled, seatTimes, alpha) {
+    const p = pal(color);
+    const x = tg.x + offsetX, y = tg.y, w = tg.w, h = tg.h;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    // rails
+    // body
+    ctx.shadowColor = p.base; ctx.shadowBlur = 22; ctx.shadowOffsetY = 0;
+    const bg = ctx.createLinearGradient(0, y, 0, y + h);
+    bg.addColorStop(0, '#2a3a5c'); bg.addColorStop(1, '#18233b');
+    ctx.fillStyle = bg;
+    ctx.beginPath();
+    const nose = Math.min(46, h * 0.55);
+    ctx.moveTo(x + nose, y);
+    ctx.lineTo(x + w - 14, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + 14);
+    ctx.lineTo(x + w, y + h - 10);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - 10, y + h);
+    ctx.lineTo(x + 10, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - 10);
+    ctx.lineTo(x, y + h * 0.5);
+    ctx.quadraticCurveTo(x + 4, y, x + nose, y);
+    ctx.closePath();
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    // colour stripe
+    ctx.fillStyle = p.base;
+    ctx.fillRect(x + 4, y + h * 0.78, w - 8, h * 0.08);
+    // headlight + windscreen with line badge
+    ctx.fillStyle = 'rgba(255,240,200,.9)';
+    ctx.beginPath(); ctx.arc(x + 12, y + h * 0.66, 3.5, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = p.base;
+    ctx.beginPath(); ctx.arc(x + 36, y + h * 0.42, Math.min(18, h * 0.22), 0, Math.PI * 2); ctx.fill();
+    glyph(p.glyph, x + 36, y + h * 0.42, Math.min(8, h * 0.1), 'rgba(10,18,32,.85)');
+    // seats / windows
+    const geo = { x, y, w, h };
+    for (let k = 0; k < state.capacity; k++) {
+      const sp = seatPos(k, geo);
+      const ww = sp.s - 8, wh = h * 0.5;
+      ctx.fillStyle = '#0c1424';
+      rr(sp.x - ww / 2, sp.y - wh / 2, ww, wh, 8); ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,.08)'; ctx.lineWidth = 1; ctx.stroke();
+      if (k < seatsFilled) {
+        const st = seatTimes ? seatTimes[k] : null;
+        const prog = st == null ? 1 : (now - st - 220) / 220;
+        if (prog > 0) {
+          const s = easeBack(prog);
+          ctx.save();
+          ctx.beginPath(); rr(sp.x - ww / 2, sp.y - wh / 2, ww, wh, 8); ctx.clip();
+          person(sp.x, sp.y + wh * 0.12, Math.min(ww, wh) * 0.42 * s, color);
+          ctx.restore();
+        }
+      }
+    }
+    ctx.restore();
+  }
+
+  function draw() {
+    if (!bgCache) bgCache = buildBg();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.drawImage(bgCache, 0, 0);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    if (!state) return;
+    const lo = layout();
+    const tg = trainGeom(lo);
+    const train = state.trains[state.trainIndex];
+
+    // track
+    ctx.strokeStyle = 'rgba(143,162,196,.18)'; ctx.lineWidth = 2;
+    const ry = tg.y + tg.h + 6;
+    ctx.beginPath(); ctx.moveTo(0, ry); ctx.lineTo(W, ry); ctx.moveTo(0, ry + 5); ctx.lineTo(W, ry + 5); ctx.stroke();
+    ctx.fillStyle = 'rgba(143,162,196,.14)';
+    for (let x = ((-now * 0.02) % 18 + 18) % 18; x < W; x += 18) ctx.fillRect(x, ry - 1, 3, 8);
+
+    const shakeX = state.shake > 0 ? Math.sin(state.shake * 0.09) * 6 * (state.shake / 280) : 0;
+    // departing train slides out to the left
+    if (state.depart) {
+      const k = (now - state.depart.t) / 520;
+      if (k >= 1) state.depart = null;
+      else drawTrain(state.depart.color, tg, -ease(Math.max(0, k)) * (tg.x + tg.w + 40), state.depart.cap, null, 1 - Math.max(0, k) * 0.3);
+    }
+    if (train) {
+      const a = (now - state.arriveT) / 520;
+      const off = a < 0 ? W : (1 - ease(a)) * (W - tg.x + 20);
+      if (a >= 0 || !state.depart) drawTrain(train, tg, off + shakeX, state.boarded, state.seatTimes, 1);
+    }
+
+    // upcoming trains
+    const ny = tg.y + tg.h + 22;
+    ctx.font = '600 12px Vazirmatn, Tahoma, system-ui, sans-serif';
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'right';
+    const remaining = state.trains.length - state.trainIndex;
+    ctx.fillStyle = '#8fa2c4';
+    const label = remaining > 0 ? 'قطار ' + (state.trainIndex + 1) + ' از ' + state.trains.length : 'همه‌ی قطارها رفتند';
+    ctx.fillText(label, W - lo.pad, ny);
+    let cx = lo.pad + 8;
+    ctx.textAlign = 'left';
+    if (remaining > 1) {
+      ctx.fillText('بعدی:', cx, ny); // label on the left
+      cx += ctx.measureText('بعدی:').width + 10;
+      for (let k = state.trainIndex + 1; k < state.trains.length && cx < W * 0.62; k++) {
+        const p = pal(state.trains[k]);
+        ctx.fillStyle = p.base; rr(cx, ny - 7, 26, 14, 7); ctx.fill();
+        glyph(p.glyph, cx + 13, ny, 3.5, 'rgba(10,18,32,.8)');
+        cx += 32;
+      }
+    }
+
+    // lanes
+    for (let i = 0; i < state.lanes.length; i++) {
+      const lane = state.lanes[i];
+      const R = laneRect(i, lo);
+      const cy = R.y + R.h / 2;
+      const front = lane[0];
+      const match = front && train && front.color === train && !state.over;
+      const flash = state.laneFlash[i];
+      ctx.save();
+      if (flash > 0) ctx.translate(Math.sin(flash * 0.08) * 4 * (flash / 500), 0);
+      // platform
+      const pg = ctx.createLinearGradient(0, R.y, 0, R.y + R.h);
+      pg.addColorStop(0, '#18243f'); pg.addColorStop(1, '#121b30');
+      ctx.fillStyle = pg; rr(R.x, R.y, R.w, R.h, 16); ctx.fill();
+      ctx.strokeStyle = match ? 'rgba(255,255,255,.28)' : 'rgba(255,255,255,.06)';
+      ctx.lineWidth = match ? 2 : 1;
+      if (match) { ctx.shadowColor = pal(train).base; ctx.shadowBlur = 16; }
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+      if (flash > 0) { ctx.fillStyle = 'rgba(255,93,108,' + (0.18 * flash / 500).toFixed(3) + ')'; rr(R.x, R.y, R.w, R.h, 16); ctx.fill(); }
+      // tactile safety strip (front of the queue)
+      ctx.fillStyle = 'rgba(255,211,92,.55)';
+      rr(R.x + 10, R.y + 10, 6, R.h - 20, 3); ctx.fill();
+      // lane number
+      ctx.fillStyle = 'rgba(143,162,196,.55)';
+      ctx.font = '700 ' + Math.round(Math.min(15, R.h * 0.22)) + 'px system-ui, sans-serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(String(i + 1), R.x + 29, cy);
+      // passengers
+      for (let j = lane.length - 1; j >= 0; j--) {
+        const p = lane[j];
+        const tx = passengerX(j, lo);
+        if (p.x == null) p.x = tx;
+        p.x += (tx - p.x) * 0.22;
+        if (Math.abs(tx - p.x) < 0.3) p.x = tx;
+        const bob = j === 0 && match ? Math.sin(now * 0.008) * 2 : 0;
+        const py = cy + bob - lo.r * 0.1;
+        if (j === 0 && p.timer !== null && !state.over) {
+          const frac = Math.max(0, Math.min(1, p.timer / state.timeout));
+          const ringR = lo.r * 1.42;
+          ctx.lineWidth = Math.max(3, lo.r * 0.16);
+          ctx.strokeStyle = 'rgba(255,255,255,.08)';
+          ctx.beginPath(); ctx.arc(p.x, cy, ringR, 0, Math.PI * 2); ctx.stroke();
+          ctx.strokeStyle = frac < 0.3 ? '#ff5d6c' : frac < 0.6 ? '#ffb35c' : '#dfe8f5';
+          if (frac < 0.3) { ctx.shadowColor = '#ff5d6c'; ctx.shadowBlur = 8 + Math.sin(now * 0.02) * 6; }
+          ctx.lineCap = 'round';
+          ctx.beginPath(); ctx.arc(p.x, cy, ringR, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * frac); ctx.stroke();
+          ctx.shadowBlur = 0; ctx.lineCap = 'butt';
+        }
+        person(p.x, py, lo.r, p.color, j === 0 ? 1 : 0.92 - Math.min(0.3, j * 0.05));
+      }
+      ctx.restore();
+    }
+
+    // flying passengers (lane -> seat)
+    state.flyers = state.flyers.filter((f) => {
+      const k = (now - f.t) / 220;
+      if (k >= 1) { burst(f.x1, f.y1, f.color); return false; }
+      const e = ease(k);
+      const x = f.x0 + (f.x1 - f.x0) * e;
+      const y = f.y0 + (f.y1 - f.y0) * e - Math.sin(e * Math.PI) * 40;
+      person(x, y, f.r * (1 - 0.35 * e), f.color);
+      return true;
+    });
+
+    // particles
+    state.particles = state.particles.filter((q) => {
+      const k = (now - q.t) / q.life;
+      if (k >= 1) return false;
+      ctx.globalAlpha = 1 - k;
+      ctx.fillStyle = q.c;
+      ctx.beginPath(); ctx.arc(q.x + q.vx * k * 30, q.y + q.vy * k * 30 + k * k * 18, q.s * (1 - k * 0.5), 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = 1;
+      return true;
+    });
+
+    // floating text
+    state.floaters = state.floaters.filter((f) => {
+      const k = (now - f.t) / 900;
+      if (k >= 1) return false;
+      ctx.globalAlpha = 1 - k;
+      ctx.fillStyle = f.color;
+      ctx.font = '800 16px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(f.text, f.x, f.y - 26 - k * 30);
+      ctx.globalAlpha = 1;
+      return true;
+    });
+
+    // stuck hint: nobody at the front matches the train
+    if (train && !state.over && !paused && !state.lanes.some((l) => l.length && l[0].color === train)) {
+      const msg = 'هیچ مسافر ' + ({ red: 'قرمزی', blue: 'آبی‌ای', green: 'سبزی', yellow: 'زردی' }[train] || '') + ' جلوی صف نیست؛ صبر کن تا صف بچرخد';
+      ctx.font = '600 13px Vazirmatn, Tahoma, system-ui, sans-serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      const tw = ctx.measureText(msg).width + 24;
+      const by = H - 26;
+      ctx.fillStyle = 'rgba(19,29,51,.92)'; rr(W / 2 - tw / 2, by - 15, tw, 30, 15); ctx.fill();
+      ctx.fillStyle = '#ffd35c'; ctx.fillText(msg, W / 2, by + 1);
+    }
+  }
+
+  function burst(x, y, color) {
+    const p = pal(color);
+    for (let k = 0; k < 10; k++) {
+      const a = (Math.PI * 2 * k) / 10 + Math.random() * 0.4;
+      state.particles.push({ x, y, vx: Math.cos(a), vy: Math.sin(a), s: 2 + Math.random() * 2.5, c: k % 2 ? p.light : p.base, t: now, life: 420 + Math.random() * 200 });
+    }
+  }
+
+  // ---------- input ----------
+  function laneAt(clientX, clientY) {
+    if (!state) return -1;
+    const rect = cvs.getBoundingClientRect();
+    const x = clientX - rect.left, y = clientY - rect.top;
+    const lo = layout();
+    if (x < lo.pad - 6 || x > lo.pad + lo.laneW + 6) return -1;
+    for (let i = 0; i < state.lanes.length; i++) {
+      const R = laneRect(i, lo);
+      if (y >= R.y - lo.gap / 2 && y < R.y + R.h + lo.gap / 2) return i;
+    }
+    return -1;
+  }
+  cvs.addEventListener('pointerdown', (e) => {
+    const i = laneAt(e.clientX, e.clientY);
+    if (i >= 0) tapLane(i);
+  });
+  window.addEventListener('keydown', (e) => {
+    if (overlay.classList.contains('show')) return;
+    const n = parseInt(e.key, 10);
+    if (n >= 1 && n <= 9) tapLane(n - 1);
+    else if (e.key === 'r' || e.key === 'R') startLevel(levelIndex);
+    else if (e.key === 'Escape') showMenu();
+  });
+
+  // Small hook for automated tests / debugging.
+  window.MetroUnjam = {
+    get state() { return state; },
+    get levelIndex() { return levelIndex; },
+    get paused() { return paused; },
+    startLevel, tapLane, showMenu,
+    laneCenter(i) { const lo = layout(); const R = laneRect(i, lo); return { x: R.x + R.w / 2, y: R.y + R.h / 2 }; },
+  };
+
+  if (!LEVELS.length) {
+    showOverlay('<h2>مرحله‌ای پیدا نشد</h2><p>فایل levels.js بارگذاری نشد.</p>');
+  } else {
+    state = null;
+    startLevel(levelIndex);
+    showMenu();
+  }
+  requestAnimationFrame(tick);
+})();
+</script>
+</body>
+</html>
